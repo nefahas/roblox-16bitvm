@@ -414,6 +414,7 @@ function linker:finalize()
 end
 
 function link(obj: buffer, libs: {[string]: buffer}, flags: string)
+	-- this below is outdated and im too lazy to update it
 	-- build obj file with section data, global data, and imports first two bytes of the file would be the total size of binary img in bytes
 	-- after that is section data, a table indicating a section's size, then a name null terminated
 		-- 2 bytes before entries for the section count
