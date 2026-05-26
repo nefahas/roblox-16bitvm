@@ -140,7 +140,7 @@ end
 function linker:scan_obj_for_exported_symbol(obj: buffer, name: string)
 	local offset = self:get_offset(obj, 'globals_tbl')
 	
-	local count = buffer.readu16(obj, offset)
+	local count = buffer.readu16(obj, offset); offset += 2
 	
 	for i = 0, count - 1 do
 		local sym, len = read_cstring(obj, offset)
@@ -157,6 +157,7 @@ function linker:scan_obj_for_exported_symbol(obj: buffer, name: string)
 	end
 end
 
+-- old, unused for now so not rewriting
 function linker:get_section_binary(obj: buffer, sec: string)
 	local offset = buffer.readu16(obj, 0) + 2
 	local sec_count = buffer.readu16(obj, offset + 2)
