@@ -138,9 +138,7 @@ function linker:get_redefs(obj: buffer)
 end
 
 function linker:scan_obj_for_exported_symbol(obj: buffer, name: string)
-	-- skip to global table
-	local offset = buffer.readu16(obj, 0) + 2
-	offset += buffer.readu16(obj, offset) + 2
+	local offset = self:get_offset(obj, 'globals_tbl')
 	
 	local count = buffer.readu16(obj, offset)
 	
