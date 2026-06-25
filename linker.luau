@@ -1,6 +1,8 @@
 local linker = {}
 linker.__index = linker
 
+local config = require('./Config')
+
 local function read_cstring(b: buffer, offset: number): string
 	local s = ''
 	
@@ -138,9 +140,11 @@ function linker:get_redefs(obj: buffer)
 end
 
 function linker:scan_obj_for_exported_symbol(obj: buffer, name: string)
-	local offset = self:get_offset(obj, 'globals_tbl')
+	-- skip to global table
+	local offset = buffer.readu16(obj, 0) + 2
+	offset += buffer.readu16(obj, offset) + 2
 	
-	local count = buffer.readu16(obj, offset); offset += 2
+	local count = buffer.readu16(obj, offset)
 	
 	for i = 0, count - 1 do
 		local sym, len = read_cstring(obj, offset)
@@ -157,7 +161,6 @@ function linker:scan_obj_for_exported_symbol(obj: buffer, name: string)
 	end
 end
 
--- old, unused for now so not rewriting
 function linker:get_section_binary(obj: buffer, sec: string)
 	local offset = buffer.readu16(obj, 0) + 2
 	local sec_count = buffer.readu16(obj, offset + 2)
@@ -201,18 +204,31 @@ function linker:redo_instr(binary: buffer, offset: number, a_redef: boolean, b_r
 	local data = bit32.band(bit32.rshift(instr, 3), 0xFF)
 	local opcode = bit32.rshift(instr, 11)
 	
+	local total_diff = new_offset - (offset + (self.parsed_flags.base or 0))
+	
+	--[[if total_diff >= -128 and total_diff < 127 and (opcode == config.OPCODE_MAP['JC'] or opcode == config.OPCODE_MAP['JMP'] or opcode == config.OPCODE_MAP['CALL']) then
+		-- experimentie
+		warn('can do', opcode, 'to pc+offset addrmode with', total_diff, addr_mode)
+	end]]
+	
 	offset += 2
 	
 	if addr_mode == 0 and b_redef then
-		buffer.writeu16(binary, offset, new_offset)
+		local cur = buffer.readu16(binary, offset)
+		
+		buffer.writeu16(binary, offset, new_offset + cur)
 	elseif addr_mode == 3 and a_redef then
-		buffer.writeu16(binary, offset, new_offset)
+		local cur = buffer.readu16(binary, offset)
+		
+		buffer.writeu16(binary, offset, new_offset + cur)
 	elseif addr_mode == 6 then
 		local a_size = bit32.btest(data, 1)
 		local a_reg = bit32.btest(data, 8)
 		
 		if a_redef and not a_reg then
-			buffer.writeu16(binary, offset, new_offset)
+			local cur = buffer.readu16(binary, offset)
+			
+			buffer.writeu16(binary, offset, new_offset + cur)
 		end
 		
 		if not a_reg then
@@ -220,7 +236,9 @@ function linker:redo_instr(binary: buffer, offset: number, a_redef: boolean, b_r
 		end
 		
 		if b_redef then
-			buffer.writeu16(binary, offset, new_offset)
+			local cur = buffer.readu16(binary, offset)
+			
+			buffer.writeu16(binary, offset, new_offset + cur)
 		end
 	elseif addr_mode == 7 then
 		local instr_type = bit32.band(data, 3)
@@ -230,7 +248,9 @@ function linker:redo_instr(binary: buffer, offset: number, a_redef: boolean, b_r
 		local a_reg = instr_type == 0 or instr_type == 1
 		
 		if a_redef and not a_reg then
-			buffer.writeu16(binary, offset, new_offset)
+			local cur = buffer.readu16(binary, offset)
+			
+			buffer.writeu16(binary, offset, new_offset + cur)
 			offset += 2
 		elseif a_reg then
 			offset += 1
@@ -239,7 +259,9 @@ function linker:redo_instr(binary: buffer, offset: number, a_redef: boolean, b_r
 		end
 		
 		if b_redef then
-			buffer.writeu16(binary, offset, new_offset)
+			local cur = buffer.readu16(binary, offset)
+			
+			buffer.writeu16(binary, offset, new_offset + cur)
 		end
 	end
 end
@@ -288,6 +310,7 @@ function linker:init()
 	for name, lib_bin in self.libs do
 		local bin_size = buffer.readu16(lib_bin, 0)
 		local bin = buffer.create(bin_size)
+		
 		buffer.copy(bin, 0, lib_bin, 8, bin_size)
 		
 		if imported_libs[name] then
@@ -344,7 +367,33 @@ function linker:finalize()
 			end
 			
 			if not lib then
-				error(`imported {v.name}, but no library containing it was found (non global or not linked against)`)
+				-- first check if its a linker resolved symbol
+				if v.name == '_END_OF_BINARY' then
+					v.offset = buffer.len(binary) + base
+					continue
+				elseif v.name == '_START_OF_BINARY' then
+					v.offset = base
+					continue
+				elseif string.match(v.name, '_SECT_') then
+					local name = string.sub(v.name, 7)
+					local found = false
+					
+					for _, s in self.sections do
+						if s.name == name then
+							v.offset = base + s.base
+							found = true
+							break
+						end
+					end
+					
+					if not found then
+						error(`tried to resolve {v.name}, but no section called '{name}' was found`)
+					end
+					
+					continue
+				else
+					error(`imported {v.name}, but no library containing it was found (non global or not linked against)`)
+				end
 			end
 			
 			local sec_base = 0
@@ -409,11 +458,12 @@ function linker:finalize()
 		self:redo_instr(binary, v.offset, v.a, v.b, v.sym_offset)
 	end
 	
+	warn(`LINKER: built {buffer.len(binary)} bytes!`)
+	
 	return binary
 end
 
 function link(obj: buffer, libs: {[string]: buffer}, flags: string)
-	-- this below is outdated and im too lazy to update it
 	-- build obj file with section data, global data, and imports first two bytes of the file would be the total size of binary img in bytes
 	-- after that is section data, a table indicating a section's size, then a name null terminated
 		-- 2 bytes before entries for the section count
